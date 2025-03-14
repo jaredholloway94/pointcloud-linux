@@ -1,46 +1,40 @@
-import cupy as cp
-import cupyx.scipy as sp
-import cupyx.scipy.spatial
 import networkx as nx
+import cupy as cp
+from cupyx.scipy.spatial.distance import cdist
+from copy import deepcopy
 
 points = cp.genfromtxt("bunny.csv", delimiter=",", dtype=cp.float32)
 points = cp.unique(points,axis=0)
 
+N = points.shape[0]
 K = 5
 
-point_distances = sp.spatial.distance.cdist(points,points)
+point_distances = cdist(points,points)
 point_neighbors = point_distances.argsort(axis=1)[:, 1:K+1]
 point_neighbor_coordinates = points[point_neighbors]
 
-tangent_plane_origins = cp.mean(point_neighbor_coordinates, axis=1)
-tpo_deviations = point_neighbor_coordinates - tangent_plane_origins[:, None, :]
-tpo_outer_products = tpo_deviations[..., :, None] * tpo_deviations[..., None, :]
-tpo_cv_matrices = cp.sum(tpo_outer_products, axis=1)
-tpo_eigvals, tpo_eigvecs = cp.linalg.eigh(tpo_cv_matrices)
-tpo_normals = tpo_eigvecs[:, :, 0]
+tp_origins = cp.mean(point_neighbor_coordinates, axis=1)
 
-tpo_distances = sp.spatial.distance.cdist(tangent_plane_origins, tangent_plane_origins)
-tpo_neighbors = tpo_distances.argsort(axis=1)[:, 1:K+1]
-tpo_neighbor_coordinates = tangent_plane_origins[tpo_neighbors]
+tp_distances = cdist(tp_origins, tp_origins)
+tp_neighbors = tp_distances.argsort(axis=1)[:, 1:K+1]
+tp_adjacency = cp.zeros((N,N), dtype=cp.float32)
+tp_adjacency[cp.arange(N).repeat(K), tp_neighbors.ravel()] = 1
 
+tp_deviations = point_neighbor_coordinates - tp_origins[:, None, :]
+tp_outer_products = tp_deviations[..., :, None] * tp_deviations[..., None, :]
+tp_cv_matrices = cp.sum(tp_outer_products, axis=1)
+tp_eigvals, tp_eigvecs = cp.linalg.eigh(tp_cv_matrices)
+tp_normals = tp_eigvecs[:, :, 0]
+tp_weights = 1 - cp.abs(cp.dot(tp_normals, tp_normals.T))
 
-def tp_graph_edge_weight(i,j):
-    return ( 1 - cp.abs(cp.dot(tpo_normals[int(i)],tpo_normals[int(j)])) )
+tp_weighted_adj = tp_adjacency * tp_weights
 
+tp_riem_graph = nx.from_numpy_array(tp_weighted_adj)
+tp_riem_mst = nx.minimum_spanning_tree(tp_riem_graph)
+tp_riem_graph_root_node = int(cp.argmax(tp_origins[:, 2]))
+tp_riem_mst_dfs = nx.dfs_edges(tp_riem_mst,tp_riem_graph_root_node)
 
-tp_graph = nx.Graph()
-tp_graph.add_nodes_from([
-    (i, {'x':t[0], 'y':t[1], 'z':t[2]})
-    for i,t in enumerate(tangent_plane_origins)
-    ]
-)
-tp_graph.add_edges_from([
-    ( i, int(j), {'weight': tp_graph_edge_weight(i,j)} )
-    for i,t in enumerate(tpo_neighbors)
-    for j in t
-    ]
-)
-
-tp_graph_root_node = tangent_plane_origins[cp.argmax(tangent_plane_origins[:, 2])]
-
-tp_graph_mst = nx.minimum_spanning_tree(tp_graph)
+tp_normals_oriented = deepcopy(tp_normals)
+for a,b in tp_riem_mst_dfs:
+    if cp.dot(tp_normals_oriented[a],tp_normals_oriented[b]) < 0:
+        tp_normals_oriented[b] = -1 * tp_normals_oriented[b]
