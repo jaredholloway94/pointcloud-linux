@@ -38,3 +38,10 @@ tp_normals_oriented = deepcopy(tp_normals)
 for a,b in tp_riem_mst_dfs:
     if cp.dot(tp_normals_oriented[a],tp_normals_oriented[b]) < 0:
         tp_normals_oriented[b] = -1 * tp_normals_oriented[b]
+
+
+
+
+
+# get pointcloud bounding box
+points_bb = cp.stack( (cp.min(points, axis=0),cp.max(points, axis=0)) )
